@@ -1,90 +1,53 @@
 @echo off
 setlocal
 
-REM =================================================================
-REM CONFIGURACIÓN UNIVERSAL
-REM =================================================================
+set "APP_NAME=Gestor de Correlatividades"
+set "SOURCE_FILE=main.py"
+set "SCRIPT_DIR=%~dp0"
+cd /d "%SCRIPT_DIR%"
 
-REM 1. Nombre del archivo Python (debe estar en la misma carpeta que este script)
-REM Si tu archivo se llama "Gestor Correlatividades.py", pon ese nombre aquí.
-set "NOMBRE_APP=Gestor Correlatividades"
+echo =============================================
+echo   Compilador de %APP_NAME%
+echo =============================================
 
-REM =================================================================
-REM LOGICA AUTOMATICA (NO TOCAR DEBAJO)
-REM =================================================================
-
-REM %~dp0 es una variable mágica de Windows que significa:
-REM "La ruta donde está guardado este archivo .bat ahora mismo"
-set "RUTA_ACTUAL=%~dp0"
-cd /d "%RUTA_ACTUAL%"
-
-echo ---------------------------------------------------
-echo  CONVERTIDOR UNIVERSAL A .EXE
-echo  Directorio de trabajo: %RUTA_ACTUAL%
-echo ---------------------------------------------------
-
-REM 1. Validar que Python esté instalado (Vital por lo que te pasó antes)
 python --version >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [ERROR CRITICO] Python no esta detectado en el sistema.
-    echo Por favor, instala Python marcando "Add to PATH".
+if errorlevel 1 (
+    echo [ERROR] Python no esta disponible en PATH.
+    echo Instala Python 3.12 o superior y activa "Add Python to PATH".
     pause
-    exit /b
+    exit /b 1
 )
 
-REM 2. Buscar el archivo Python
-if not exist "%NOMBRE_APP%.py" (
-    echo.
-    echo [ERROR] No encuentro el archivo: "%NOMBRE_APP%.py"
-    echo Asegurate de que el .py y este .bat esten en la misma carpeta.
+if not exist "%SOURCE_FILE%" (
+    echo [ERROR] No se encontro %SOURCE_FILE% en %SCRIPT_DIR%
     pause
-    exit /b
+    exit /b 1
 )
 
-REM 3. Crear entorno virtual temporal (si no existe)
-if not exist "venv_installer" (
-    echo [i] Creando entorno virtual temporal...
-    python -m venv venv_installer
-)
+echo [1/3] Instalando dependencias...
+python -m pip install --disable-pip-version-check -r requirements.txt pyinstaller
+if errorlevel 1 goto :error
 
-REM 4. Activar y preparar
-call venv_installer\Scripts\activate.bat
-echo [i] Instalando PyInstaller y CustomTkinter...
-pip install --disable-pip-version-check pyinstaller customtkinter >nul
+echo [2/3] Generando ejecutable...
+python -m PyInstaller --noconfirm --onefile --windowed --clean --collect-all customtkinter --name "%APP_NAME%" "%SOURCE_FILE%"
+if errorlevel 1 goto :error
 
-REM 5. Generar el ejecutable
-echo [i] Compilando (esto puede tardar unos segundos)...
-REM --noconsole: Quita la pantalla negra de fondo al abrir la app
-pyinstaller --noconfirm --onefile --windowed --clean --collect-all customtkinter --name "%NOMBRE_APP%" "%NOMBRE_APP%.py"
+echo [3/3] Copiando resultado...
+copy /Y "dist\%APP_NAME%.exe" "%APP_NAME%.exe" >nul
+if errorlevel 1 goto :error
 
-REM 6. Mover el resultado y limpiar
-if exist "dist\%NOMBRE_APP%.exe" (
-    move /Y "dist\%NOMBRE_APP%.exe" . >nul
-    echo.
-    echo [EXITO] Tu ejecutable ha sido creado: %NOMBRE_APP%.exe
-) else (
-    echo.
-    echo [ERROR] Algo fallo durante la compilacion.
-    pause
-    exit /b
-)
-
-REM 7. Limpieza agresiva (Borrar basura generada)
-echo [i] Limpiando archivos temporales...
-rd /s /q build
-rd /s /q dist
-rd /s /q venv_installer
-del "%NOMBRE_APP%.spec"
+rd /s /q build 2>nul
+rd /s /q dist 2>nul
+del /q "%APP_NAME%.spec" 2>nul
 
 echo.
-echo ---------------------------------------------------
-echo  PROCESO TERMINADO. PUEDES CERRAR ESTA VENTANA.
-echo ---------------------------------------------------
+echo Listo. Ejecutable creado en:
+echo %SCRIPT_DIR%%APP_NAME%.exe
 pause
-endlocal
-echo Ejecutable listo en: %CARPETA%\%NOMBRE_APP%.exe
-echo ---------------------------------------------------
+exit /b 0
 
+:error
+echo.
+echo [ERROR] La compilacion no se pudo completar.
 pause
-
-endlocal
+exit /b 1
