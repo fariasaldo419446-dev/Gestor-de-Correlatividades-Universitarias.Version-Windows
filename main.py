@@ -2,6 +2,7 @@ import customtkinter as ctk
 import tkinter as tk
 import json
 import os
+from pathlib import Path
 
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
@@ -317,6 +318,170 @@ class App(ctk.CTk):
             Materia(108, "Proyecto Electrónica", 5, [106, 107])
         ]
 
+class AppMejorada(App):
+    """Interfaz con persistencia segura y explicación de correlatividades."""
+
+    VERSION_DATOS = 2
+
+    def __init__(self):
+        self.archivo_estado = self.ruta_estado()
+        super().__init__()
+        self.title("Gestor de Correlatividades")
+        self.minsize(900, 600)
+
+        self.resumen_var = tk.StringVar(value="Elegí una universidad, facultad y carrera para ver tu avance.")
+        self.resumen = ctk.CTkLabel(
+            self.frame_superior,
+            textvariable=self.resumen_var,
+            anchor="w",
+            font=ctk.CTkFont(size=14, weight="bold"),
+        )
+        self.resumen.pack(side="left", padx=(16, 10), fill="x", expand=True)
+
+    @staticmethod
+    def ruta_estado():
+        """Guarda el progreso junto al perfil de Windows, sin depender del directorio de inicio."""
+        base = os.environ.get("LOCALAPPDATA")
+        if base:
+            carpeta = Path(base) / "GestorCorrelatividades"
+        else:
+            carpeta = Path.home() / ".gestor_correlatividades"
+        carpeta.mkdir(parents=True, exist_ok=True)
+        return carpeta / "estado_materias.json"
+
+    def carrera_seleccionada(self, carrera):
+        super().carrera_seleccionada(carrera)
+        if carrera:
+            self.actualizar_disponibilidad_actual()
+
+    def actualizar_disponibilidad_actual(self):
+        universidad = self.universidad_var.get()
+        facultad = self.facultad_var.get()
+        carrera = self.carrera_var.get()
+        if not (universidad and facultad and carrera):
+            return
+
+        materias = self.universidades[universidad][facultad][carrera]
+        por_codigo = {materia.codigo: materia for materia in materias}
+        for materia in materias:
+            faltantes = self.correlativas_faltantes(materia, por_codigo)
+            materia.disponible = not faltantes
+            materia.actualizar_color()
+
+        if hasattr(self, "resumen_var"):
+            aprobadas = sum(m.estado == Estado.APROBADA for m in materias)
+            disponibles = sum(m.disponible and m.estado != Estado.APROBADA for m in materias)
+            self.resumen_var.set(
+                f"{carrera}  |  {aprobadas}/{len(materias)} aprobadas  |  {disponibles} disponibles"
+            )
+
+    @staticmethod
+    def correlativas_faltantes(materia, por_codigo):
+        faltantes = []
+        for codigo in materia.correlativas_regular:
+            correlativa = por_codigo.get(codigo)
+            if correlativa is None:
+                faltantes.append(f"Regularizar la correlativa {codigo}")
+            elif correlativa.estado not in (Estado.REGULAR, Estado.APROBADA):
+                faltantes.append(f"Regularizar: {correlativa.nombre}")
+        for codigo in materia.correlativas_aprobadas:
+            correlativa = por_codigo.get(codigo)
+            if correlativa is None:
+                faltantes.append(f"Aprobar la correlativa {codigo}")
+            elif correlativa.estado != Estado.APROBADA:
+                faltantes.append(f"Aprobar: {correlativa.nombre}")
+        return faltantes
+
+    def abrir_popup_estado(self, materia):
+        universidad = self.universidad_var.get()
+        facultad = self.facultad_var.get()
+        carrera = self.carrera_var.get()
+        materias = self.universidades[universidad][facultad][carrera]
+        faltantes = self.correlativas_faltantes(materia, {m.codigo: m for m in materias})
+
+        popup = ctk.CTkToplevel(self)
+        popup.title(f"Estado de {materia.nombre}")
+        popup.geometry("480x310")
+        popup.transient(self)
+        popup.grab_set()
+
+        ctk.CTkLabel(
+            popup,
+            text=materia.nombre,
+            wraplength=420,
+            font=ctk.CTkFont(size=16, weight="bold"),
+        ).pack(padx=20, pady=(20, 8))
+
+        mensaje = "Disponible para cursar." if not faltantes else "Para habilitarla falta:\n• " + "\n• ".join(faltantes)
+        ctk.CTkLabel(popup, text=mensaje, justify="left", wraplength=420).pack(padx=20, pady=8, anchor="w")
+
+        estado_var = tk.StringVar(value=materia.estado)
+        ctk.CTkOptionMenu(
+            popup,
+            values=[Estado.NO_CURSADA, Estado.CURSANDO, Estado.REGULAR, Estado.APROBADA],
+            variable=estado_var,
+        ).pack(pady=10)
+
+        def confirmar():
+            materia.estado = estado_var.get()
+            self.actualizar_disponibilidad_actual()
+            self.guardar_estados()
+            popup.destroy()
+
+        ctk.CTkButton(popup, text="Guardar estado", command=confirmar).pack(pady=(4, 18))
+
+    def guardar_estados(self):
+        carreras = {}
+        for universidad, facultades in self.universidades.items():
+            for facultad, oferta in facultades.items():
+                for carrera, materias in oferta.items():
+                    clave = " | ".join((universidad, facultad, carrera))
+                    carreras[clave] = {str(m.codigo): m.estado for m in materias}
+
+        contenido = {"version": self.VERSION_DATOS, "carreras": carreras}
+        temporal = self.archivo_estado.with_suffix(".tmp")
+        with temporal.open("w", encoding="utf-8") as archivo:
+            json.dump(contenido, archivo, ensure_ascii=False, indent=2)
+        temporal.replace(self.archivo_estado)
+
+    def cargar_estados(self):
+        # Conserva el formato anterior si el usuario ya tenía progreso guardado.
+        origen = self.archivo_estado
+        legado = Path.cwd() / ESTADO_FILE
+        if not origen.exists() and legado.exists():
+            origen = legado
+        if not origen.exists():
+            return
+
+        try:
+            with origen.open("r", encoding="utf-8") as archivo:
+                datos = json.load(archivo)
+        except (OSError, json.JSONDecodeError):
+            return
+
+        if "carreras" in datos:
+            for universidad, facultades in self.universidades.items():
+                for facultad, oferta in facultades.items():
+                    for carrera, materias in oferta.items():
+                        clave = " | ".join((universidad, facultad, carrera))
+                        self.aplicar_estados(materias, datos["carreras"].get(clave, {}))
+            return
+
+        for universidad, facultades in datos.items():
+            for facultad, carreras in facultades.items():
+                for carrera, estados in carreras.items():
+                    materias = self.universidades.get(universidad, {}).get(facultad, {}).get(carrera)
+                    if materias:
+                        self.aplicar_estados(materias, estados)
+
+    @staticmethod
+    def aplicar_estados(materias, estados):
+        estados_validos = {Estado.NO_CURSADA, Estado.CURSANDO, Estado.REGULAR, Estado.APROBADA}
+        for materia in materias:
+            estado = estados.get(str(materia.codigo))
+            if estado in estados_validos:
+                materia.estado = estado
+
 if __name__ == "__main__":
-    app = App()
+    app = AppMejorada()
     app.mainloop()
